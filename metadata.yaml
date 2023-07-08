@@ -34,17 +34,23 @@ authors:
 # doi: 10.5281/zenodo.#####
 
 # Copyright statement
-copyright: "2023, Association of Universities for Research in Astronomy, Inc. (AURA)"
+copyright: >-
+  2023, Association of Universities for Research in Astronomy, Inc. (AURA)
 
 # Description. A short, 1-2 sentence statemement used by document indices.
-description: "A design for Kubernetes secrets management and bootstrapping for Phalanx, the management infrastructure for the Rubin Science Platform."
+description: >-
+  A design for Kubernetes secrets management and bootstrapping for Phalanx,
+  the management infrastructure for the Rubin Science Platform.
 
 # Abstract, if available
-# abstract: >
-#           Write your paragraph
-#           here with multiple lines.
-#
-#           You can have multiple paragraphs too.
+abstract: >
+  Phalanx is the Kubernetes management and operations layer, used to deploy
+  both the Rubin Science Platform and other Kubernetes clusters maintained by
+  Rubin. As part of deploying applications on a Kubernetes cluster, secrets
+  required by those applications must be retrieved or generated and stored in
+  the cluster so that they are provided to running services. This tech note
+  discusses the requirements and possible implementation options for Phalanx
+  secrets management and proposes a design.
 
 # URL where this document is published by Read the Docs. e.g. http://sqr-001.lsst.codes
 url: "https://sqr-079.lsst.io"
