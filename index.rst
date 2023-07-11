@@ -80,7 +80,7 @@ Requirements
 Overview of problem
 -------------------
 
-A Phalanx deployment consists of some number of **applications** managed by `Argo CD`.
+A Phalanx deployment consists of some number of **applications** managed by `Argo CD`_.
 Some applications are mandatory and included in every deployment.
 The rest can be enabled or disabled, depending on the needs of that deployment.
 
