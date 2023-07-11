@@ -324,7 +324,7 @@ Configuration
 
 The enabled applications for a given environment will be determined from the Argo CD configuration in :file:`environments`.
 Whether an optional application is enabled for an environment will be determined from the settings in :file:`values-{environment}.yaml`.
-The list of mandatory applications enabled for every environment will be termined by parsing the Argo CD application definitions in :file:`environments/templates` to find Argo CD applications that are always installed.
+The list of mandatory applications enabled for every environment will be determined by parsing the Argo CD application definitions in :file:`environments/templates` to find Argo CD applications that are always installed.
 (This approach requires more implementation work, but ensures there is no separate configuration file that can become desynchronized from the Argo CD configuration.)
 
 Additional per-environment configuration required by these utilities will be added to the per-environment configuration files in :file:`environments`.
