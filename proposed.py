@@ -36,7 +36,7 @@ with Diagram(
         secrets = Secret("Kubernetes secrets")
 
     with Cluster("Phalanx CLI"):
-        generate = Python("phalanx generate")
+        generate = Python("phalanx secrets sync")
         install = Python("phalanx install")
 
     with Cluster("Secret storage"):
