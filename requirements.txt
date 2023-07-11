@@ -1,1 +1,2 @@
 documenteer[technote]
+sphinx-diagrams
