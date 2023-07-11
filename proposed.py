@@ -48,6 +48,6 @@ with Diagram(
     install << connect << onepassword
     admin >> onepassword
     admin >> generate >> vault
-    generate << connect << onepassword
+    generate << connect
     token >> vso >> secrets
     vso << vault

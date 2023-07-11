@@ -239,8 +239,10 @@ The specification of the secret has the following keys:
 ``description`` (string, required)
     Human-readable description of the secret.
     This should include a summary of what the secret is used for, any useful information about the consequences if it should be leaked, and any details on how to rotate it if needed.
-    Markdown may be used to format the description.
+    The description must be formatted with reStructuredText_.
     The ``>`` and ``|`` features of YAML will be helpful in keeping this description readable inside the YAML file.
+
+.. _reStructuredText: https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html
 
 ``if`` (string, optional)
     If present, specifies the conditions under which this secret is required.
@@ -272,6 +274,7 @@ The specification of the secret has the following keys:
 
 The same specification is used for both the :file:`secrets.yaml` and :file:`secrets-{environment}.yaml` files.
 Either or both may be missing for a given application.
+Secrets specified in :file:`secrets-{environment}.yaml` override (completely, not through merging the specifications) any secret with the same key in :file:`secrets.yaml`.
 
 These files will be syntax-checked against a YAML schema in CI tests for the Phalanx repository.
 
@@ -297,6 +300,10 @@ The subcommands relevant to this specification that will be supported are:
     Regenerate the secrets for the given environment.
     All generated secrets will be regenerated and changed, and all static secrets will be updated to their current values from 1Password (see :ref:`onepassword`) or a static secrets file (see :ref:`static-secrets-file`).
     This command is destructive and will prompt the user first to be sure they want to proceed.
+
+:samp:`phalanx secrets static-template {environment}`
+    Generate a template for the static secrets file for the given environment.
+    See :ref:`static-secrets-file` for more information.
 
 :samp:`phalanx secrets sync {environment}`
     Flesh out the Vault secrets for the specified environment by adding any missing secrets, either by generating them if they are generated secrets or obtaining them from 1Password (see :ref:`onepassword`) or from a file of static secrets (see :ref:`static-secrets-file`).
@@ -334,12 +341,66 @@ Specifically, the following parameters will be added:
 1Password integration
 ---------------------
 
+Phalanx supports using 1Password directly for two things: retrieving the read token for the Vault path used for a given Phalanx environment, which in turn is provided to vault-secrets-operator so that it can synchronize Kubernetes ``Secret`` resources from Vault secrets; and retrieving the values of static secrets in order to store in Vault.
+Both of these interactions are done via a `1Password Connect`_ server, which is the supported way of interacting with 1Password via an API.
+
+1Password Connect design
+^^^^^^^^^^^^^^^^^^^^^^^^
+
+A 1Password Connect server provides access to all of the entries in a single 1Password vault.
+In the initial Phalanx 1Password integration design, we used a single 1Password vault for all Phalanx environments.
+This had the advantage of storing each secret only once, even if it was used by multiple environments, although the mechanism used to do that is somewhat complicated.
+The drawback of this approach is access control: one Phalanx environment, including command-line invocations for that environment, should not have access to secrets for other environments for both safety and security reasons.
+
+In this design, each Phalanx environment that uses 1Password will have its own vault.
+That vault will contain only the static secrets for that environment plus the Vault read token for the Vault path for that environment.
+All programmatic interactions with that 1Password Connect server will be done using the onepasswordconnectsdk_ module.
+
+.. _onepasswordconnectsdk: https://github.com/1Password/connect-sdk-python
+
+Each Phalanx environment 1Password vault will have a corresponding 1Password Connect server with access only to that vault.
+These 1Password Connect servers will run on different URLs on the Roundtable Phalanx deployment.
+(This creates a bootstrapping problem for the Roundtable environment itself, but this problem already exists since this cluster is also where the SQuaRE Vault server runs.
+This cluster will have to be manually bootstrapped, outside of the abilities of the Phalanx installer.
+The exact details of that bootstrap are outside the scope of this tech note.)
+
+For each 1Password Connect server, we will generate an authentication token that provides read access to its corresponding vault.
+That token will be stored in the regular SQuaRE 1Password vault, outside of the Phalanx environment vaults, where it will only be manually accessible to SQuaRE staff.
+When bootstrapping or synchronizing a cluster, the SQuaRE staff member performing that work will retrieve that token and provide it to the relevant Phalanx command line invocations.
+
+Object naming
+^^^^^^^^^^^^^
+
+Since all entries in a given 1Password vault are for a single Phalanx environment, and that vault is not shared with humans storing general secrets, we can use a much simpler naming convention for secrets.
+
+The Vault read token is stored in an entry named ``vault-read-token``.
+
+All other static secrets are stored in entries named :samp:`{application}/{key}` corresponding to the application and key of that static secret.
+
+All entries in the vault are of type :menuselection:`Login`.
+The value of the secret is stored in the :guilabel:`password` field.
+
 .. _static-secrets-file:
 
 Static secrets from a file
 --------------------------
 
+Phalanx has a large number of applications and a large number of static secrets, so the interactive prompting approach of the initial design has become unwieldy.
+Therefore, in the case where 1Password is not in use, Phalanx will read static secrets from a YAML file instead of prompting for them.
+
+Running :samp:`phalanx secrets static-template {environment}` will generate a template for this file for a given environment.
+The top level object will have one key for each application that needs static secrets.
+Below each application will be one key for each static secret required by that application.
+The values should be the values of the actual secrets (set to empty strings in the template).
+
+To provide static secrets to the ``phalanx secrets audit``, ``phalanx secrets sync``, and ``phalanx secrets regenerate`` commands, provide the ``--secrets`` flag with an argument pointing at the location of the fleshed-out YAML file with the static secret values.
+
 .. _documentation:
 
 Documentation
 -------------
+
+Similar to how documentation for the Helm chart values is automatically generated and included in the `published Phalanx documentation <https://phalanx.lsst.io/>`__, each application that uses secrets will also have an automatically-generated documentation page describing those secrets.
+The description for each secret, plus any interesting configuration settings, will be extracted from :file:`secrets.yaml` or :file:`secrets-{environment}.yaml`, and the secret description page will be created using a custom Sphinx plugin.
+
+The automatically generated documentation for environments will be enhanced to add the Vault server and documentation of whether 1Password is in use as the authoritative static secret store.
