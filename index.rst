@@ -36,6 +36,7 @@ As of July 2023, Phalanx uses the following design for secrets management:
   It can prompt the user for each secret, or it can retrieve the secrets from 1Password_.
   The latter approach requires access to a `1Password Connect`_ server.
   A server for the Rubin Observatory SQuaRE team is running in the Roundtable_ Kubernetes cluster.
+  It provides access to a single 1Password vault that includes the secrets for all SQuaRE-run Phalanx deployments.
 
 .. _1Password: https://1password.com/
 .. _1Password Connect: https://developer.1password.com/docs/connect/
@@ -76,8 +77,8 @@ We've run into a variety of problems with this approach.
 Requirements
 ============
 
-Model
------
+Overview of problem
+-------------------
 
 A Phalanx deployment consists of some number of **applications** managed by `Argo CD`.
 Some applications are mandatory and included in every deployment.
@@ -132,8 +133,8 @@ Each application secret has a key and a description.
 The former is the key in the entry in the external secret store and also normally the key in the Kubernetes ``Secret`` resource to create, and thus the key should be chosen to match the expected key used by the application's Kubernetes resources.
 The description is a human-readable description of the secret and what it is used for.
 
-Each application secret is also marked as mandatory, optional, or required if and only if a specific application setting is present.
-In the last case, the setting is a Helm chart value, which may be set in either :file:`values.yaml` or in :file:`values-{environment}.yaml`.
+Each application secret is also marked as either mandatory or required only if a specific application setting is present.
+In the latter case, the setting is a Helm chart value, which may be set in either :file:`values.yaml` or in :file:`values-{environment}.yaml`.
 
 In some cases, an application secret may be a copy of the secret used by another application.
 A typical example of this is the database password used to talk to an internal PostgreSQL server deployed by Phalanx.
@@ -165,8 +166,180 @@ Several secret generation methods are supported and can be configured:
 - A Gafaelfawr_ token (used for a bootstrap token).
 - A Fernet_ key.
 - An RSA private key.
-- A bcrypt password hash.
+- A bcrypt password hash of another secret.
 
 .. _Gafaelfawr: https://gafaelfawr.lsst.io/
 .. _Fernet: https://cryptography.io/en/latest/fernet/
 
+The bcrypt hash secret adds one wrinkle: the underlying secret for which it is a hash should be stored in the external secret store for human retrieval, and may be a static secret, but it should not be put into a Kubernetes ``Secret`` resource.
+(The point of having a hashed secret is to avoid exposing the actual secret to Kubernetes.)
+
+Proposed design
+===============
+
+Overview
+--------
+
+We will continue to use Vault as the external secret store and vault-secrets-operator to create corresponding Kubernetes secrets.
+In the future, we will consider switching to the first-party `Vault Secrets Operator`_ released by Hashicorp.
+Currently it does not support authenticating to a Vault server in a different Kubernetes cluster, which is a requirement for Phalanx.
+
+.. _Vault Secrets Operator: https://developer.hashicorp.com/vault/tutorials/kubernetes/vault-secrets-operator
+
+For SQuaRE deployments, we will run a single Vault server in the Roundtable cluster.
+This is a non-science-platform Phalanx deployment used to run SQuaRE infrastructure.
+
+Vault will be another Phalanx application and thus can be deployed using Phalanx, but the bootstrapping of a Phalanx deployment will assume that the Vault server is running externally.
+Deployments that want to use Phalanx to manage their Vault server will therefore need to run a separate Phalanx deployment similar to Roundtable for that type of external infrastructure.
+Alternately, they can deploy Vault via any other convenient local means.
+
+Each Phalanx application that relies on provided secrets, either static or generated, will have a :file:`secrets.yaml` file at the top-level of the application chart that defines those secrets.
+The specification for this YAML file is given in :ref:`secrets-spec`.
+This file will describe the contents of the application's secret entry in Vault.
+The mapping of those Vault keys to Kubernetes ``Secret`` resources will be specified using ``VaultSecret`` resources installed as normal by the application Helm chart.
+
+The application may have an additional :file:`secrets-{environment}.yaml` file that specifies an additional set of secrets used only in that environment.
+This usage should be rare, but is useful when the secrets are very environment-specific, such as secrets that exist only to be mounted in Notebook Aspect containers for user use.
+
+Phalanx will provide a command-line tool to manage the secrets for a deployment written in Python.
+This is described in detail under :ref:`command-line`.
+
+This command-line tool will support importing static secrets and the read token for Vault access from 1Password.
+All interactions with 1Password will be done through a 1Password Connect server.
+Each deployment will have its own 1Password vault and corresponding 1Password Connect server, containing only the secrets for that deployment.
+See :ref:`onepassword` for more details.
+If 1Password is not in use, static secrets will be read from a local file.
+See :ref:`static-secrets-file` for more details.
+
+The existing shell-based Phalanx installer will be replaced with a new installer written in Python.
+It will support creating the bootstrap secret for vault-secrets-operator, either by requiring it as a parameter or retrieving it from a 1Password Connect server.
+(Other details of the new installer are outside the scope of this tech note.)
+
+Here is a rough diagram of the proposed design.
+
+.. diagrams:: proposed.py
+
+This is nearly identical to the previous diagram, except the shell scripts have been replaced with the Phalanx CLI and the install operation is optionally able to read the Vault token directly from 1Password.
+The 1Password links are all optional and can be omitted for deployments that do not use 1Password as the authoritative secret store, in which case static secrets will be read from a local file.
+
+.. _secrets-spec:
+
+Secrets specification
+---------------------
+
+Secrets for each application are specified by a file named :file:`secrets.yaml` at the top level of the application chart directory (at the same level as :file:`Chart.yaml`).
+The file may be missing if the application does not need any secrets.
+
+The top level of the file is an object mapping the key of a secret to its specification.
+The key corresponds to the key under which this secret is stored in the secret entry in Vault for this application.
+The entry itself will be named after the application; specifically, it matches the name of the directory under :file:`applications` in the Phalanx repository where the application chart is defined.
+
+The specification of the secret has the following keys:
+
+``description`` (string, required)
+    Human-readable description of the secret.
+    This should include a summary of what the secret is used for, any useful information about the consequences if it should be leaked, and any details on how to rotate it if needed.
+    Markdown may be used to format the description.
+    The ``>`` and ``|`` features of YAML will be helpful in keeping this description readable inside the YAML file.
+
+``if`` (string, optional)
+    If present, specifies the conditions under which this secret is required.
+    The value should be a Helm values key that, if set to a true value (including a non-empty list or object), indicates that this secret is required.
+    The Phalanx tools will look first in :file:`values-{environment}.yaml` and then in :file:`values.yaml` to see if this value is set.
+
+``copy`` (object, optional)
+    If present, specifies that this secret is a copy of another secret.
+    If this is present, none of the subsequent settings may be present.
+    The value, if present, consists of two keys, ``application`` and ``key``, that specify the name of the application and the secret key for that application from which to copy the secret value.
+
+``generate`` (object, optional)
+    Specifies that this is a generated secret rather than a static secret.
+    The nested settings specify how to generate the secret.
+
+    ``type`` (string, required)
+        One of the values ``password``, ``gafaelfawr-token``, ``fernet-key``, ``rsa-private-key``, or ``bcrypt-password-hash``.
+        Specifies the type of generated secret.
+
+    ``source`` (string, required for ``bcrypt-password-hash``)
+        This setting is present if and only if the ``type`` is ``bcrypt-password-hash``.
+        The value is the name of the key, within this application, of the secret that should be hashed to create this secret.
+
+``value`` (string, optional)
+    In some cases, applications may need a value exposed as a secret that is not actually a secret.
+    The preferred way to do this is to add such values directly in the ``VaultSecret`` object, but in some cases it's clearer to store them in :file:`secrets.yaml` alongside other secrets.
+    In those cases, ``value`` contains the literal value of the secret (without any encoding such as base64).
+    Obviously, do not use this for any secrets that are actually secret, only for public configuration settings that have to be put into a secret due to application requirements.
+
+The same specification is used for both the :file:`secrets.yaml` and :file:`secrets-{environment}.yaml` files.
+Either or both may be missing for a given application.
+
+These files will be syntax-checked against a YAML schema in CI tests for the Phalanx repository.
+
+.. _command-line:
+
+Phalanx CLI
+-----------
+
+Phalanx will add a new command-line tool, invoked as :command:`phalanx`, that collects the various operations on a Phalanx deployment that are currently done by shell scripts in the :file:`installer` directory, as well as some new functions.
+The subcommands relevant to this specification that will be supported are:
+
+:samp:`phalanx secrets audit {environment}`
+    Compare the secrets required for a given environment with the secrets currently present in Vault for the given environment and report any missing or unexpected secrets.
+    This command will never make changes, only report on anything unexpected.
+
+:samp:`phalanx secrets get-token {environment}`
+    Get the Vault token for the given environment, creating it in Vault if necessary.
+    By default, the read token is returned.
+    Pass ``--write`` to retrieve the write token instead.
+    Pass ``--recreate`` to force recreation of the token, invalidating any older token.
+
+:samp:`phalanx secrets regenerate {environment}`
+    Regenerate the secrets for the given environment.
+    All generated secrets will be regenerated and changed, and all static secrets will be updated to their current values from 1Password (see :ref:`onepassword`) or a static secrets file (see :ref:`static-secrets-file`).
+    This command is destructive and will prompt the user first to be sure they want to proceed.
+
+:samp:`phalanx secrets sync {environment}`
+    Flesh out the Vault secrets for the specified environment by adding any missing secrets, either by generating them if they are generated secrets or obtaining them from 1Password (see :ref:`onepassword`) or from a file of static secrets (see :ref:`static-secrets-file`).
+    Any already-existing secrets that are required for the environment will not be changed.
+    With the ``--delete`` flag, also delete any unexpected secrets from Vault.
+
+The ``audit`` command requires either Vault read token (set via the ``VAULT_TOKEN`` environment variable) or a 1Password Connect token that can be used to retrieve the Vault read token.
+
+The ``regenerate`` and ``sync`` commands require the Vault write token (set via the ``VAULT_TOKEN`` environment variable).
+This token cannot be obtained from 1Password Connect because it is not stored in the 1Password vault for that environment, since it should not be accessible to that environment.
+
+The ``get-token`` command requires a Vault admin token (set via the ``VAULT_TOKEN`` environment variable).
+
+All of these commands may require a 1Password Connect authentication token if 1Password is in use (set via the ``OP_CONNECT_TOKEN`` environment variable).
+
+Configuration
+^^^^^^^^^^^^^
+
+The enabled applications for a given environment will be determined from the Argo CD configuration in :file:`environments`.
+Whether an optional application is enabled for an environment will be determined from the settings in :file:`values-{environment}.yaml`.
+The list of mandatory applications enabled for every environment will be termined by parsing the Argo CD application definitions in :file:`environments/templates` to find Argo CD applications that are always installed.
+(This approach requires more implementation work, but ensures there is no separate configuration file that can become desynchronized from the Argo CD configuration.)
+
+Additional per-environment configuration required by these utilities will be added to the per-environment configuration files in :file:`environments`.
+Specifically, the following parameters will be added:
+
+``onePasswordConnectServer`` (optional)
+    URL of the 1Password Connect server to use for this environment if this environment uses 1Password as the authoritative source for static secrets.
+
+``vaultServer`` (required)
+    URL of the Vault server to use for this environment.
+
+.. _onepassword:
+
+1Password integration
+---------------------
+
+.. _static-secrets-file:
+
+Static secrets from a file
+--------------------------
+
+.. _documentation:
+
+Documentation
+-------------

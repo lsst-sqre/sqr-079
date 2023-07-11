@@ -5,7 +5,7 @@ from diagrams.generic.storage import Storage
 from diagrams.k8s.podconfig import Secret
 from diagrams.onprem.client import User
 from diagrams.onprem.security import Vault
-from diagrams.programming.language import Bash
+from diagrams.programming.language import Python
 
 graph_attr = {
     "label": "",
@@ -21,9 +21,9 @@ node_attr = {
 }
 
 with Diagram(
-    "Starting point",
+    "Proposed design",
     show=False,
-    filename="starting",
+    filename="proposed",
     outformat="png",
     graph_attr=graph_attr,
     node_attr=node_attr,
@@ -35,18 +35,19 @@ with Diagram(
         vso = KubernetesEngine("Vault Secrets Operator")
         secrets = Secret("Kubernetes secrets")
 
-    with Cluster("Phalanx installer"):
-        installer = Bash("install.sh")
-        update = Bash("update_secrets.sh")
+    with Cluster("Phalanx CLI"):
+        generate = Python("phalanx generate")
+        install = Python("phalanx install")
 
     with Cluster("Secret storage"):
         vault = Vault("Vault")
         connect = Rack("1Password Connect")
         onepassword = Storage("1Password")
 
-    admin >> installer >> token
-    admin >> update >> vault
-    update << connect << onepassword
+    admin >> install >> token
+    install << connect << onepassword
     admin >> onepassword
-    token >> vso << vault
-    vso >> secrets
+    admin >> generate >> vault
+    generate << connect << onepassword
+    token >> vso >> secrets
+    vso << vault
