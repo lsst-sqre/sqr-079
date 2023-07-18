@@ -32,11 +32,13 @@ clean:
 	rm -rf $(BUILDDIR)/*
 
 html:
+	rm -rf _build/html/_images
 	$(SPHINXBUILD) -b html $(ALLSPHINXOPTS) $(BUILDDIR)/html
 	@echo
 	@echo "Build finished. The HTML pages are in $(BUILDDIR)/html."
 
 epub:
+	rm -rf _build/html/_images
 	$(SPHINXBUILD) -b epub $(ALLSPHINXOPTS) $(BUILDDIR)/epub
 	@echo
 	@echo "Build finished. The epub file is in $(BUILDDIR)/epub."
