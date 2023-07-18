@@ -135,12 +135,15 @@ The description is a human-readable description of the secret and what it is use
 
 Each application secret is also marked as either mandatory or required only if a specific application setting is present.
 In the latter case, the setting is a Helm chart value, which may be set in either :file:`values.yaml` or in :file:`values-{environment}.yaml`.
+In some cases, there may be no way to determine if the secret is required based on a simple Helm chart setting, and the list of secrets may need to be configured by environment.
 
 In some cases, an application secret may be a copy of the secret used by another application.
 A typical example of this is the database password used to talk to an internal PostgreSQL server deployed by Phalanx.
 Both the PostgreSQL database itself and the application that talks to it must be configured with the same password.
+A secret may be a copy in some environments but not in other environments.
 
 Secrets can be divided into two major categories, static secrets and generated secrets.
+The same secret may be static in some environments and generated in other environments.
 
 Static secrets
 --------------
@@ -251,8 +254,19 @@ The specification of the secret has the following keys:
 
 ``copy`` (object, optional)
     If present, specifies that this secret is a copy of another secret.
-    If this is present, none of the subsequent settings may be present.
-    The value, if present, consists of two keys, ``application`` and ``key``, that specify the name of the application and the secret key for that application from which to copy the secret value.
+    It has the following nested settings.
+
+    ``application`` (string, required)
+        Application from which to copy this secret value.
+
+    ``key`` (string, required)
+        Secret key in that application from which to copy this secret value.
+
+    ``if`` (string, optional)
+        If present, specifies a Helm values key that, if set to a true value, indicates this secret should be copied.
+        It is interpreted the same as ``if`` at the top level.
+        If the condition is false, the whole ``copy`` stanza will be ignored.
+        If true, or if this ``if`` key is not present, either ``generate`` must be unset or must have an ``if`` condition that is false.
 
 ``generate`` (object, optional)
     Specifies that this is a generated secret rather than a static secret.
@@ -266,17 +280,36 @@ The specification of the secret has the following keys:
         This setting is present if and only if the ``type`` is ``bcrypt-password-hash``.
         The value is the name of the key, within this application, of the secret that should be hashed to create this secret.
 
+    ``if`` (string, optional)
+        If present, specifies a Helm values key that, if set to a true value, indicates this secret should be generated.
+        It is interpreted the same as ``if`` at the top level.
+        If the condition is false, the whole ``generate`` stanza will be ignored (making this a static secret in that environment instead).
+        If true, or if this ``if`` key is not present, either ``copy`` must be unset or must have an ``if`` condition that is false.
+
 ``value`` (string, optional)
     In some cases, applications may need a value exposed as a secret that is not actually a secret.
     The preferred way to do this is to add such values directly in the ``VaultSecret`` object, but in some cases it's clearer to store them in :file:`secrets.yaml` alongside other secrets.
     In those cases, ``value`` contains the literal value of the secret (without any encoding such as base64).
     Obviously, do not use this for any secrets that are actually secret, only for public configuration settings that have to be put into a secret due to application requirements.
+    ``value`` must not be set if either ``copy`` or ``generate`` are set and either do not have an ``if`` condition or have a true ``if`` condition.
 
 The same specification is used for both the :file:`secrets.yaml` and :file:`secrets-{environment}.yaml` files.
 Either or both may be missing for a given application.
 Secrets specified in :file:`secrets-{environment}.yaml` override (completely, not through merging the specifications) any secret with the same key in :file:`secrets.yaml`.
 
 These files will be syntax-checked against a YAML schema in CI tests for the Phalanx repository.
+
+Special secrets
+---------------
+
+There are two special secrets for each environment that fall outside of the normal per-application secret configuration.
+
+The Vault read token for that environment will be written directly to a ``Secret`` resource in Kubernetes consumed by the vault-secrets-operator application.
+This will be done as part of the installation bootstrapping process.
+
+Each environment may have a pull secret used to authenticate Kubernetes to sources of Docker images when necessary.
+The same pull secret is used by all applications in that environment that require a pull secret; per-application pull secrets are not supported in Phalanx.
+This secret will be stored in Vault as ``pull-secret``, rather than under the name of any specific application, and applications can use ``VaultSecret`` resources to create a ``Secret`` from that Vault secret if they need to authenticate Docker image retrieval.
 
 .. _command-line:
 
@@ -375,10 +408,12 @@ Since all entries in a given 1Password vault are for a single Phalanx environmen
 
 The Vault read token is stored in an entry named ``vault-read-token``.
 
-All other static secrets are stored in entries named :samp:`{application}/{key}` corresponding to the application and key of that static secret.
+The pull secret for the environment is stored in an entry named ``pull-secret``.
 
-All entries in the vault are of type :menuselection:`Login`.
-The value of the secret is stored in the :guilabel:`password` field.
+All other static secrets are stored in entries named for the application.
+All entries should be of type :menuselection:`Server` with all of the pre-defined sections deleted.
+Each key and value pair within that entry will correspond to one secret for the application, with the key matching the key of that secret.
+Fields will be marked as passwords when appropriate for their 1Password UI semantics, but Phalanx will read the secret value without regard for the type of field.
 
 .. _static-secrets-file:
 
